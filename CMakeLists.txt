@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.10)
 project(ReadPCD CXX)
 
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fopenmp")
+
 find_package(PCL 1.8 REQUIRED)
 
 include_directories(${PCL_INCLUDE_DIRS})
