@@ -9,6 +9,7 @@
 #include <eigen3/Eigen/Dense>
 #include <limits>
 #include <omp.h>
+#include <fstream>
 #define EIGEN_USE_MKL_ALL
 #define EIGEN_DONT_VECTORIZE
 #define EIGEN_DISABLE_UNALIGNED_ARRAY_ASSERT
@@ -75,6 +76,9 @@ std::pair<pcl::PointCloud<pcl::PointXYZ>::Ptr, pcl::PointCloud<pcl::PointXYZ>::P
 std::pair<pcl::PointXYZ, pcl::PointXYZ> fitLineToPointCloud(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud)
 {
     pcl::PointXYZ centroid;
+    centroid.x = 0;
+    centroid.y = 0;
+    centroid.z = 0;
     for (const auto &point : cloud->points)
     {
         centroid.x += point.x;
@@ -96,86 +100,142 @@ std::pair<pcl::PointXYZ, pcl::PointXYZ> fitLineToPointCloud(const pcl::PointClou
     Eigen::JacobiSVD<Eigen::Matrix3f> svd(covariance, Eigen::ComputeFullU | Eigen::ComputeFullV);
     Eigen::Vector3f direction = svd.matrixU().col(0);
 
-    pcl::PointXYZ closestPoint;
-    float minDistance = std::numeric_limits<float>::max();
-    for (const auto &point : cloud->points)
-    {
-        float distance = std::abs(direction.dot(Eigen::Vector3f(point.x, point.y, point.z)));
-        if (distance < minDistance)
-        {
-            minDistance = distance;
-            closestPoint = point;
-        }
-    }
+    pcl::PointXYZ endpoint;
+    endpoint.x = centroid.x + direction.x();
+    endpoint.y = centroid.y + direction.y();
+    endpoint.z = centroid.z + direction.z();
 
-    pcl::PointXYZ unitPoint;
-    unitPoint.x = closestPoint.x + direction.x();
-    unitPoint.y = closestPoint.y + direction.y();
-    unitPoint.z = closestPoint.z + direction.z();
-
-    return {closestPoint, unitPoint};
+    return {centroid, endpoint};
 }
 
-void findLines(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud,
-               double inlier_max_dist = 0.5, int min_inliers = 10, int max_pairs = 10)
+struct LineDetectionResult
 {
+    pcl::PointXYZ p0;
+    pcl::PointXYZ p1;
+    int inliers;
+    pcl::PointCloud<pcl::PointXYZ>::Ptr inlierCloud;
+    pcl::PointXYZ lineP0;
+    pcl::PointXYZ lineP1;
+    float lapseTime;
+};
+
+std::vector<LineDetectionResult> findLines(const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud,
+                                           double inlier_max_dist = 0.5, int max_pairs = 10)
+{
+    std::vector<LineDetectionResult> results;
     if (cloud->points.size() < 2)
         throw std::runtime_error("Need at least 2 points");
+
+    pcl::PointCloud<pcl::PointXYZ>::Ptr workingCloud(new pcl::PointCloud<pcl::PointXYZ>(*cloud));
 
     for (int k = 0; k < max_pairs; k++)
     {
         auto start_time = std::chrono::high_resolution_clock::now();
-        int countPairsWithOkayInliers = 0;
-        int maxInliers = 0;
         int totalPairsChecked = 0;
-        // declare an array to record p0p1, inlierCount in al array for sortign later
         std::vector<std::tuple<pcl::PointXYZ, pcl::PointXYZ, int>> pairsWithInliers;
 
 #pragma omp parallel reduction(+ : totalPairsChecked)
         {
             std::vector<std::tuple<pcl::PointXYZ, pcl::PointXYZ, int>> localPairs;
-#pragma omp for nowait schedule(static)
-            for (int i = 0; i < cloud->points.size(); ++i)
+#pragma omp for nowait
+            for (int i = 0; i < workingCloud->points.size(); ++i)
             {
-                for (int j = i + 1; j < cloud->points.size(); ++j)
+                for (int j = i + 1; j < workingCloud->points.size(); ++j)
                 {
                     totalPairsChecked++;
-                    const pcl::PointXYZ &p0 = cloud->points[i];
-                    const pcl::PointXYZ &p1 = cloud->points[j];
-                    int inlierCount = countInliers(cloud, p0, p1, inlier_max_dist);
+                    const pcl::PointXYZ &p0 = workingCloud->points[i];
+                    const pcl::PointXYZ &p1 = workingCloud->points[j];
+                    int inlierCount = countInliers(workingCloud, p0, p1, inlier_max_dist);
                     localPairs.emplace_back(p0, p1, inlierCount);
                 }
             }
 #pragma omp critical
             pairsWithInliers.insert(pairsWithInliers.end(), localPairs.begin(), localPairs.end());
         }
-
-        // sort the pairs by inlier count
-        std::sort(pairsWithInliers.begin(), pairsWithInliers.end(),
-                  [](const auto &a, const auto &b)
-                  { return std::get<2>(a) > std::get<2>(b); });
-
-        const auto &[p0, p1, inlierCount] = pairsWithInliers[0];
-        std::cout << "Best pair: "
-                  << "P0(" << p0.x << ", " << p0.y << ", " << p0.z << "), "
-                  << "P1(" << p1.x << ", " << p1.y << ", " << p1.z << "), "
-                  << "Inliers: " << inlierCount << std::endl;
-        auto [inliers, cleanedCloud] = getInliersAndCleaned(cloud, p0, p1, inlier_max_dist);
-        // copy cleanedCloud to cloud
-        *cloud = *cleanedCloud;
-
-        // find line to the inliers
-        auto [lineP0, lineP1] = fitLineToPointCloud(inliers);
-
+        std::cout << "Total pairs checked: " << totalPairsChecked << " length of pairsWithInliers: " << pairsWithInliers.size() << std::endl;
+        if (pairsWithInliers.empty())
+        {
+            std::cout << "No pairs with inliers found. Stopping." << std::endl;
+            break;
+        }
+        auto bestPairIt = std::max_element(
+            pairsWithInliers.begin(), pairsWithInliers.end(),
+            [](const auto &a, const auto &b)
+            {
+                return std::get<2>(a) < std::get<2>(b);
+            });
+        const auto &[p0, p1, inlierCount] = *bestPairIt;
+        std::cout << "Best pair: (" << p0.x << ", " << p0.y << ", " << p0.z << ") and ("
+                  << p1.x << ", " << p1.y << ", " << p1.z << ") with inliers: " << inlierCount << std::endl;
+        auto [inliersCloud, cleanedCloud] = getInliersAndCleaned(workingCloud, p0, p1, inlier_max_dist);
+        // puch in only if inlierCount > 1
+        if (inlierCount < 2)
+        {
+            std::cout << "Not enough inliers found for pair (" << p0.x << ", " << p0.y << ", " << p0.z << ") and ("
+                      << p1.x << ", " << p1.y << ", " << p1.z << "). Skipping." << std::endl;
+            continue;
+        }
+        auto [lineP0, lineP1] = fitLineToPointCloud(inliersCloud);
         auto end_time = std::chrono::high_resolution_clock::now();
-        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+        std::chrono::duration<float> elapsed = end_time - start_time;
+        // Store result
+        results.push_back(LineDetectionResult{p0, p1, inlierCount, inliersCloud, lineP0, lineP1, elapsed.count()});
 
-        std::cout << "Total time: " << duration.count() << " ms" << "Total pairs: " << totalPairsChecked << "Average: " << (double)duration.count() / totalPairsChecked << " ms" << std::endl;
-
-        std::cout << "Line P0: (" << lineP0.x << ", " << lineP0.y << ", " << lineP0.z << "), "
-                  << "Line P1: (" << lineP1.x << ", " << lineP1.y << ", " << lineP1.z << ")" << std::endl;
+        // Update workingCloud for next iteration
+        *workingCloud = *cleanedCloud;
     }
-    return;
+    return results;
+}
+
+void writeCloudAndResultsToJson(const std::string &filename,
+                                const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud,
+                                const std::vector<LineDetectionResult> &results)
+{
+    std::ofstream out(filename);
+
+    out << "{\n";
+    // Write points
+    out << "  \"points\": [\n";
+    for (size_t i = 0; i < cloud->points.size(); ++i)
+    {
+        const auto &pt = cloud->points[i];
+        out << "    {\"x\": " << pt.x << ", \"y\": " << pt.y << ", \"z\": " << pt.z << "}";
+        if (i + 1 < cloud->points.size())
+            out << ",";
+        out << "\n";
+    }
+    out << "  ],\n";
+    // Write results
+    out << "  \"lines\": [\n";
+    for (size_t i = 0; i < results.size(); ++i)
+    {
+        const auto &res = results[i];
+        out << "    {\n";
+        out << "      \"p0\": {\"x\": " << res.p0.x << ", \"y\": " << res.p0.y << ", \"z\": " << res.p0.z << "},\n";
+        out << "      \"p1\": {\"x\": " << res.p1.x << ", \"y\": " << res.p1.y << ", \"z\": " << res.p1.z << "},\n";
+        out << "      \"inliers\": " << res.inliers << ",\n";
+        out << "      \"lapseTime\": " << res.lapseTime << ",\n";
+        out << "      \"lineP0\": {\"x\": " << res.lineP0.x << ", \"y\": " << res.lineP0.y << ", \"z\": " << res.lineP0.z << "},\n";
+        out << "      \"lineP1\": {\"x\": " << res.lineP1.x << ", \"y\": " << res.lineP1.y << ", \"z\": " << res.lineP1.z << "},\n";
+        // Write inlier points for this line
+        out << "      \"inlierCloud\": [\n";
+        for (size_t j = 0; j < res.inlierCloud->points.size(); ++j)
+        {
+            const auto &ipt = res.inlierCloud->points[j];
+            out << "        {\"x\": " << ipt.x << ", \"y\": " << ipt.y << ", \"z\": " << ipt.z << "}";
+            if (j + 1 < res.inlierCloud->points.size())
+                out << ",";
+            out << "\n";
+        }
+        out << "      ]\n";
+        out << "    }";
+        if (i + 1 < results.size())
+            out << ",";
+        out << "\n";
+    }
+    out << "  ]\n";
+    out << "}\n";
+    out.close();
 }
 
 int main(int argc, char **argv)
@@ -193,12 +253,36 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    // std::cout << "Loaded " << cloud->width * cloud->height
-    //           << " data points from " << argv[1] << std::endl;
+    // keep only first 10 points
+    // #declare new cloud
+
+    if (cloud->points.size() > 10 && 0)
+    {
+        pcl::PointCloud<pcl::PointXYZ>::Ptr reducedCloud(new pcl::PointCloud<pcl::PointXYZ>);
+        std::sample(cloud->points.begin(), cloud->points.end(),
+                    std::back_inserter(reducedCloud->points),
+                    10, std::mt19937{std::random_device{}()});
+        cloud = reducedCloud;
+    }
+
+    // Generate output JSON filename based on input filename
+    std::string inputFile(argv[1]);
+    std::string outputFile = inputFile;
+    // Remove directory path
+    size_t lastSlash = outputFile.find_last_of("/\\");
+    if (lastSlash != std::string::npos)
+        outputFile = outputFile.substr(lastSlash + 1);
+    // Remove .pcd extension if present
+    size_t ext = outputFile.rfind(".pcd");
+    if (ext != std::string::npos)
+        outputFile = outputFile.substr(0, ext);
+    outputFile = "../public/json/"+outputFile+".json";
 
     try
     {
-        findLines(cloud, 0.5, 75, 3);
+        auto results = findLines(cloud, 0.5, 30);
+        writeCloudAndResultsToJson(outputFile, cloud, results);
+        std::cout << "Wrote results to: " << outputFile << std::endl;
     }
     catch (const std::exception &e)
     {
@@ -208,3 +292,4 @@ int main(int argc, char **argv)
 
     return 0;
 }
+

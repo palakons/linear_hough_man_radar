@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Point Cloud & Line Viewer</title>
+    <style>
+        body {
+            margin: 0;
+            /* Always show scrollbars for both axes, styled for all platforms */
+            overflow: scroll;
+            scrollbar-width: thin;
+            scrollbar-color: #888 #eee;
+        }
+
+        /* Webkit (Chrome, Safari, Edge) */
+        body::-webkit-scrollbar {
+            width: 10px;
+            height: 10px;
+        }
+
+        body::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 5px;
+        }
+
+        body::-webkit-scrollbar-track {
+            background: #eee;
+        }
+
+        #slider {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 10;
+            background: #fff;
+            padding: 8px;
+            border-radius: 6px;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="fileList"
+        style="position:absolute;top:10px;right:10px;z-index:20;background:#fff;padding:8px;border-radius:6px;max-height:80vh;overflow:auto;">
+        <b>Available JSON files:</b>
+        <div id="files"></div>
+    </div>
+    <div id="slider">
+        Inlier threshold: <input type="range" id="inlierSlider" min="0" max="100" value="10" step="1">
+        <span id="inlierValue">10</span>
+    </div>
+    <script type="importmap">
+    {
+        "imports": {
+          "three": "https://unpkg.com/three@0.155.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.155.0/examples/jsm/",
+          "dat.gui": "https://unpkg.com/dat.gui@0.7.9/build/dat.gui.module.js"
+        }
+    }
+    </script>
+    <script type="module" src="main.js"></script>
+</body>
+
+</html>
