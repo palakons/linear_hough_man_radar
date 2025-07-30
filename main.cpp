@@ -278,6 +278,14 @@ int main(int argc, char **argv)
         outputFile = outputFile.substr(0, ext);
     outputFile = "../public/json/"+outputFile+".json";
 
+    //if the output file already exists, return 
+    std::ifstream checkFile(outputFile);
+    if (checkFile.good())
+    {
+        std::cerr << "Output file already exists: " << outputFile << ". Please remove it before running again." << std::endl;
+        return 1;
+    }
+
     try
     {
         auto results = findLines(cloud, 0.5, 30);

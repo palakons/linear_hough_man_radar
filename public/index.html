@@ -37,19 +37,134 @@
             padding: 8px;
             border-radius: 6px;
         }
+
+        /* Color-coded labels for radar sensors */
+        .radar-left-front {
+            color: #ff0000;
+        }
+
+        /* Red */
+        .radar-left-back {
+            color: #00ff00;
+        }
+
+        /* Green */
+        .radar-right-front {
+            color: #0000ff;
+        }
+
+        /* Blue */
+        .radar-right-back {
+            color: #ffaa00;
+        }
+
+        /* Yellow/Orange */
+        .radar-left-side {
+            color: #ff00ff;
+        }
+
+        /* Magenta */
+        .radar-right-side {
+            color: #00ffff;
+        }
+
+        /* Cyan */
     </style>
 </head>
 
 <body>
-    <div id="fileList"
-        style="position:absolute;top:10px;right:10px;z-index:20;background:#fff;padding:8px;border-radius:6px;max-height:80vh;overflow:auto;">
-        <b>Available JSON files:</b>
-        <div id="files"></div>
-    </div>
     <div id="slider">
-        Inlier threshold: <input type="range" id="inlierSlider" min="0" max="100" value="10" step="1">
-        <span id="inlierValue">10</span>
+
+        <label for="sequenceSelect">Sequence:</label>
+        <select id="sequenceSelect">
+            <option value="">Loading...</option>
+        </select>
+
+        <label for="frameSelect">Frame:</label>
+        <select id="frameSelect">
+            <option value="">Select sequence first</option>
+        </select>
+        <button id="nextFrameButton">Next Frame</button>
+        <div class="slider-group">
+            <label for="inlierSlider">Inlier threshold: </label>
+            <input type="range" id="inlierSlider" min="0" max="100" value="10" step="1">
+            <span id="inlierValue">10</span>
+        </div>
+
+        <div class="slider-group">
+            <label for="angleSlider">Angle threshold: </label>
+            <input type="range" id="angleSlider" min="0" max="10" value="2" step=".1">
+            <span id="angleValue">2</span>°
+        </div>
+
+        <div class="slider-group">
+            <label for="spatialSlider">Spatial threshold: </label>
+            <input type="range" id="spatialSlider" min="0" max="2" value="1.0" step="0.01"><span
+                id="spatialValue">1.0</span>m
+        </div>
+
+        <!-- Display Options -->
+        <div class="checkbox-group">
+            <div class="feature-label">Display Options:</div>
+            <div class="checkbox-option">
+                <input type="checkbox" id="showOnlyValidPairs" value="validPairs" checked>
+                <label for="showOnlyValidPairs">Show ONLY Valid Pairs</label>
+            </div>
+        </div>
+
+        <div class="radio-group">
+            <div class="coordinate-label">Coordinate System:</div>
+            <div class="radio-option">
+                <input type="radio" id="sensorCoords" name="coordSystem" value="sensor">
+                <label for="sensorCoords">Sensor</label>
+            </div>
+            <div class="radio-option">
+                <input type="radio" id="worldCoords" name="coordSystem" value="world" checked>
+                <label for="worldCoords">World</label>
+            </div>
+            <div class="checkbox-option">
+                <input type="checkbox" id="showCameras" value="showCameras" checked>
+                <label for="showCameras">Show Cameras</label>
+            </div>
+        </div>
+
+        <div style="font-weight: bold; margin-bottom: 6px;">Radar Sensors:</div>
+        <div class="radar-checkbox">
+            <input type="checkbox" id="RADAR_LEFT_FRONT" checked>
+            <label for="RADAR_LEFT_FRONT" class="radar-left-front">Left Front</label>
+            <span class="radar-status" id="status_RADAR_LEFT_FRONT">-</span>
+        </div>
+        <div class="radar-checkbox">
+            <input type="checkbox" id="RADAR_LEFT_BACK" checked>
+            <label for="RADAR_LEFT_BACK" class="radar-left-back">Left Back</label>
+            <span class="radar-status" id="status_RADAR_LEFT_BACK">-</span>
+        </div>
+        <div class="radar-checkbox">
+            <input type="checkbox" id="RADAR_RIGHT_FRONT" checked>
+            <label for="RADAR_RIGHT_FRONT" class="radar-right-front">Right Front</label>
+            <span class="radar-status" id="status_RADAR_RIGHT_FRONT">-</span>
+        </div>
+        <div class="radar-checkbox">
+            <input type="checkbox" id="RADAR_RIGHT_BACK" checked>
+            <label for="RADAR_RIGHT_BACK" class="radar-right-back">Right Back</label>
+            <span class="radar-status" id="status_RADAR_RIGHT_BACK">-</span>
+        </div>
+        <div class="radar-checkbox">
+            <input type="checkbox" id="RADAR_LEFT_SIDE" checked>
+            <label for="RADAR_LEFT_SIDE" class="radar-left-side">Left Side</label>
+            <span class="radar-status" id="status_RADAR_LEFT_SIDE">-</span>
+        </div>
+        <div class="radar-checkbox">
+            <input type="checkbox" id="RADAR_RIGHT_SIDE" checked>
+            <label for="RADAR_RIGHT_SIDE" class="radar-right-side">Right Side</label>
+            <span class="radar-status" id="status_RADAR_RIGHT_SIDE">-</span>
+        </div>
+        <div class="radar-checkbox">
+            <div id="analysis_results">Analysis Results:</div>
+        </div>
     </div>
+
+
     <script type="importmap">
     {
         "imports": {
