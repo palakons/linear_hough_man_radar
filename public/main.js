@@ -117,7 +117,7 @@ for (let i = 10; i < axesLength; i += 10) {
 }
 scene.add(tickGroup);
 let camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-let cameraDistance = 400;
+let cameraDistance = 200;
 // Default: point at 0 deg (positive Z)
 camera.position.set(0, -cameraDistance, -cameraDistance);
 camera.lookAt(0, 0, 0);
@@ -515,26 +515,26 @@ function analyzeLinePairs() {
         html += `<table style="border-collapse:collapse;font-size:13px;">
         <thead><tr style="background:#eee;">
             <th style="border:1px solid #ccc;padding:2px 6px;">#</th>
-            <th style="border:1px solid #ccc;padding:2px 6px;">Seq ID</th>
-            <th style="border:1px solid #ccc;padding:2px 6px;">Frame ID</th>
-            <th style="border:1px solid #ccc;padding:2px 6px;">Radar 1</th>
-            <th style="border:1px solid #ccc;padding:2px 6px;">Idx 1</th>
-            <th style="border:1px solid #ccc;padding:2px 6px;">Inliers 1</th>
-            <th style="border:1px solid #ccc;padding:2px 6px;">Radar 2</th>
-            <th style="border:1px solid #ccc;padding:2px 6px;">Idx 2</th>
-            <th style="border:1px solid #ccc;padding:2px 6px;">Inliers 2</th>
-            <th style="border:1px solid #ccc;padding:2px 6px;">Angle (°)</th>
-            <th style="border:1px solid #ccc;padding:2px 6px;">Spatial Δ (m)</th>
+            <th style="border:1px solid #ccc;padding:2px 6px;">Seq</th>
+            <th style="border:1px solid #ccc;padding:2px 6px;">Frm</th>
+            <th style="border:1px solid #ccc;padding:2px 6px;">R1</th>
+            <th style="border:1px solid #ccc;padding:2px 6px;">Id1</th>
+            <th style="border:1px solid #ccc;padding:2px 6px;">Count1</th>
+            <th style="border:1px solid #ccc;padding:2px 6px;">R2</th>
+            <th style="border:1px solid #ccc;padding:2px 6px;">Id2</th>
+            <th style="border:1px solid #ccc;padding:2px 6px;">Count2</th>
+            <th style="border:1px solid #ccc;padding:2px 6px;">Δ°</th>
+            <th style="border:1px solid #ccc;padding:2px 6px;">Δm</th>
         </tr></thead><tbody>`;
         validPairs.forEach((pair, idx) => {
             html += `<tr>
             <td style=\"border:1px solid #ccc;padding:2px 6px;\">${idx + 1}</td>
             <td style=\"border:1px solid #ccc;padding:2px 6px;\">${currentFrameData && currentFrameData.seq_id !== undefined ? currentFrameData.seq_id : '-'}</td>
             <td style=\"border:1px solid #ccc;padding:2px 6px;\">${currentFrameData && currentFrameData.frame_id !== undefined ? currentFrameData.frame_id : '-'}</td>
-            <td style=\"border:1px solid #ccc;padding:2px 6px;\">${pair.radar1}</td>
+            <td style=\"border:1px solid #ccc;padding:2px 6px;\">${pair.radar1.replace('RADAR_', '')}</td>
             <td style=\"border:1px solid #ccc;padding:2px 6px;\">${pair.line1Index}</td>
             <td style=\"border:1px solid #ccc;padding:2px 6px;\">${pair.line1Inliers}</td>
-            <td style=\"border:1px solid #ccc;padding:2px 6px;\">${pair.radar2}</td>
+            <td style=\"border:1px solid #ccc;padding:2px 6px;\">${pair.radar2.replace('RADAR_', '')}</td>
             <td style=\"border:1px solid #ccc;padding:2px 6px;\">${pair.line2Index}</td>
             <td style=\"border:1px solid #ccc;padding:2px 6px;\">${pair.line2Inliers}</td>
             <td style=\"border:1px solid #ccc;padding:2px 6px;\">${pair.angle.toFixed(2)}</td>
