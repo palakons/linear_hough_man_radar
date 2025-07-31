@@ -1,3 +1,58 @@
+// Global list to accumulate all analysis results across frames
+let globalAnalysisResults = [];
+
+// UI for global analysis results
+function updateGlobalAnalysisUI() {
+    let div = document.getElementById('global_analysis_results');
+    if (!div) {
+        div = document.createElement('div');
+        div.id = 'global_analysis_results';
+        div.style.margin = '12px 0 8px 0';
+        div.style.fontSize = '14px';
+        document.body.insertBefore(div, document.body.firstChild.nextSibling); // after first child (e.g. after controls)
+    }
+    let count = globalAnalysisResults.length;
+    div.innerHTML = `<b>Accumulated Matches:</b> <span style="color:#005">${count}</span> &nbsp; ` +
+        `<button id="resetGlobalAnalysisBtn" style="font-size:12px;padding:2px 8px;">Reset</button> ` +
+        `<button id="copyGlobalAnalysisCsvBtn" style="font-size:12px;padding:2px 8px;">Copy as CSV</button>`;
+
+    // Add event listeners
+    document.getElementById('resetGlobalAnalysisBtn').onclick = function () {
+        globalAnalysisResults = [];
+        updateGlobalAnalysisUI();
+    };
+    document.getElementById('copyGlobalAnalysisCsvBtn').onclick = function () {
+        if (globalAnalysisResults.length === 0) return;
+        const header = [
+            'seq_id', 'frame_id', 'radar1', 'line1Index', 'line1Inliers',
+            'radar2', 'line2Index', 'line2Inliers', 'angle', 'spatialDistance'
+        ];
+        const rows = globalAnalysisResults.map(pair => [
+            pair.seq_id ?? '',
+            pair.frame_id ?? '',
+            pair.radar1,
+            pair.line1Index,
+            pair.line1Inliers,
+            pair.radar2,
+            pair.line2Index,
+            pair.line2Inliers,
+            pair.angle?.toFixed(2),
+            pair.spatialDistance?.toFixed(2)
+        ]);
+        let csv = header.join(',') + '\n' + rows.map(r => r.join(',')).join('\n');
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+            navigator.clipboard.writeText(csv);
+        } else {
+            // fallback
+            const textarea = document.createElement('textarea');
+            textarea.value = csv;
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
+        }
+    };
+}
 // Next Frame button logic
 document.getElementById('nextFrameButton').addEventListener('click', function () {
     if (!sceneData || sceneData.length === 0) return;
@@ -119,7 +174,7 @@ scene.add(tickGroup);
 let camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
 let cameraDistance = 200;
 // Default: point at 0 deg (positive Z)
-camera.position.set(0, -cameraDistance, -cameraDistance);
+camera.position.set(0, -cameraDistance * 1.5, cameraDistance / 1.5);
 camera.lookAt(0, 0, 0);
 scene.rotation.set(0, 0, Math.PI / 2); // Rotate 45 degrees around Y axis
 
@@ -127,6 +182,14 @@ let renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 let controls = new OrbitControls(camera, renderer.domElement);
+// Remove any rotation limits for full freedom
+controls.minPolarAngle = 0;
+controls.maxPolarAngle = Math.PI;
+controls.minAzimuthAngle = -Infinity;
+controls.maxAzimuthAngle = Infinity;
+controls.enableDamping = true;
+controls.enablePan = true;
+controls.enableZoom = true;
 controls.update();
 
 let linesGroup = new THREE.Group();
@@ -198,6 +261,7 @@ function addCameraImagePlane(cameraInfo, name = "CAMERA", dist_from_cam = 200) {
     // Load the image
     const loader = new THREE.TextureLoader();
     loader.load(cameraInfo.image_file, function (texture) {
+        texture.flipY = false;
         // Get image aspect ratio from texture
         const aspect = texture.image.width / texture.image.height;
         // Use intrinsics to set the size of the plane (optional: scale by focal length)
@@ -489,6 +553,31 @@ function analyzeLinePairs() {
     visualizeValidPairs(validLinePairs);
     refreshRadarDisplay();
     updateAnalysisResultsTable(validLinePairs);
+
+    // Add to global list (with seq_id, frame_id)
+    if (currentFrameData && validLinePairs.length > 0) {
+        // Only add new unique matches for this frame (avoid duplicates if re-analyzing same frame)
+        const frameKey = `${currentFrameData.seq_id}_${currentFrameData.frame_id}`;
+        // Remove any previous entries for this frame
+        globalAnalysisResults = globalAnalysisResults.filter(pair => `${pair.seq_id}_${pair.frame_id}` !== frameKey);
+        // Add new
+        validLinePairs.forEach(pair => {
+            globalAnalysisResults.push({
+                seq_id: currentFrameData.seq_id,
+                frame_id: currentFrameData.frame_id,
+                radar1: pair.radar1,
+                radar2: pair.radar2,
+                line1Index: pair.line1Index,
+                line2Index: pair.line2Index,
+                angle: pair.angle,
+                spatialDistance: pair.spatialDistance,
+                line1Inliers: pair.line1Inliers,
+                line2Inliers: pair.line2Inliers
+            });
+        });
+        updateGlobalAnalysisUI();
+    }
+
     return validLinePairs;
     // Fill the analysis_results div with a table of valid line pairs
     function updateAnalysisResultsTable(validPairs) {
@@ -1056,6 +1145,9 @@ function handleFrameChange() {
 
 
 
+
+// Add global analysis UI on page load
+window.addEventListener('DOMContentLoaded', updateGlobalAnalysisUI);
 // Initialize file list on page load
 // loadFileList();
 loadSceneData();
