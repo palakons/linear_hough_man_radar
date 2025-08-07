@@ -1,222 +1,59 @@
-// --- Next in matched pairs button logic ---
-document.getElementById('nextFrameMPButton').addEventListener('click', function () {
-    // Get all unique (seq_id, frame_id) pairs from matchedPairs
-    const uniqueFrames = Array.from(new Set(matchedPairs.map(p => `${p.seq_id}_${p.frame_id}`)));
-    if (!currentFrameData) return;
-    const currentKey = `${currentFrameData.seq_id}_${currentFrameData.frame_id}`;
-    let idx = uniqueFrames.indexOf(currentKey);
-    if (idx === -1) idx = 0; // fallback: start at first
-    let nextIdx = (idx + 1) % uniqueFrames.length;
-    const [nextSeq, nextFrame] = uniqueFrames[nextIdx].split('_');
-    // Update dropdowns and load frame
-    const sequenceSelect = document.getElementById('sequenceSelect');
-    const frameSelect = document.getElementById('frameSelect');
-    sequenceSelect.value = nextSeq;
-    // Repopulate frame dropdown for this sequence if needed
-    if (typeof populateFrameDropdown === 'function') {
-        const frames = sceneData.filter(f => f.seq_id == nextSeq);
-        populateFrameDropdown(nextSeq, frames);
+// Global list to accumulate all analysis results across frames
+let globalAnalysisResults = [];
+
+// UI for global analysis results
+function updateGlobalAnalysisUI() {
+    let div = document.getElementById('global_analysis_results');
+    if (!div) {
+        div = document.createElement('div');
+        div.id = 'global_analysis_results';
+        div.style.margin = '12px 0 8px 0';
+        div.style.fontSize = '14px';
+        document.body.insertBefore(div, document.body.firstChild.nextSibling); // after first child (e.g. after controls)
     }
-    frameSelect.value = nextFrame;
-    // Find the frameData object
-    const frameData = sceneData.find(f => f.seq_id == nextSeq && f.frame_id == nextFrame);
-    if (frameData) {
-        loadSceneFrame(frameData);
-    }
-});
-// --- Matched pairs visualization ---
-let matchedPairs = [];
-let matchedPairsByFrame = {};
+    let count = globalAnalysisResults.length;
+    div.innerHTML = `<b>Accumulated Matches:</b> <span style="color:#005">${count}</span> &nbsp; ` +
+        `<button id="resetGlobalAnalysisBtn" style="font-size:12px;padding:2px 8px;">Reset</button> ` +
+        `<button id="copyGlobalAnalysisCsvBtn" style="font-size:12px;padding:2px 8px;">Copy as CSV</button>`;
 
-// Load and parse matched_pairs.csv
-async function loadMatchedPairsCSV() {
-    try {
-        const response = await fetch('/matched_pairs_30.csv');
-        const text = await response.text();
-        const lines = text.trim().split('\n');
-        const header = lines[0].split(',');
-        matchedPairs = lines.slice(1).map(line => {
-            const cols = line.split(',');
-            let obj = {};
-            header.forEach((h, i) => { obj[h.trim()] = cols[i].trim(); });
-            // Convert numeric fields
-            obj.frame_id = parseInt(obj.frame_id);
-            obj.seq_id = parseInt(obj.seq_id);
-            obj.line1Index = parseInt(obj.line1Index);
-            obj.line2Index = parseInt(obj.line2Index);
-            obj.line1Inliers = parseInt(obj.line1Inliers);
-            obj.line2Inliers = parseInt(obj.line2Inliers);
-            obj.angle = parseFloat(obj.angle);
-            obj.spatialDistance = parseFloat(obj.spatialDistance);
-            return obj;
-        });
-        // Group by frame/seq for fast lookup
-        matchedPairsByFrame = {};
-        matchedPairs.forEach(pair => {
-            const key = `${pair.seq_id}_${pair.frame_id}`;
-            if (!matchedPairsByFrame[key]) matchedPairsByFrame[key] = [];
-            matchedPairsByFrame[key].push(pair);
-        });
-    } catch (err) {
-        console.error('Failed to load matched_pairs.csv:', err);
-    }
-}
-
-// Project all radar points onto all camera image planes for current frame
-function projectPointsToImages(dist_from_cam = 300) {
-    if (!currentFrameData) return;
-    // Get all camera channels
-    const cameraChannels = [
-        'CAMERA_LEFT_FRONT',
-        'CAMERA_LEFT_BACK',
-        'CAMERA_RIGHT_FRONT',
-        'CAMERA_RIGHT_BACK'
-    ];
-    // Clear previous projected points and dispose geometries/materials
-    while (projectedGroup.children.length) {
-        const obj = projectedGroup.children[0];
-        if (obj.geometry) obj.geometry.dispose();
-        if (obj.material) obj.material.dispose();
-        projectedGroup.remove(obj);
-    }
-
-    // Collect all projected points and colors for this frame
-    let positions = [];
-    let colors = [];
-
-    cameraChannels.forEach(camCh => {
-        const cam = currentFrameData[camCh];
-        if (!cam || !cam.intrinsics || !cam.rotation || !cam.translation) return;
-
-        radarSensors.forEach(sensor => {
-            if (!document.getElementById(sensor).checked) return;
-            const radarData = currentRadarData[sensor];
-            if (!radarData || !radarData.points) return;
-
-            radarData.points.forEach(pt => {
-                let adjustedPoint = transformToWorld(pt, currentFrameData[sensor].rotation, currentFrameData[sensor].translation);
-                if (optimizedRT && document.getElementById('applyOptimizedRT').checked) {
-                    const optRT = optimizedRT['steps'][currentRTStep][sensor];
-                    adjustedPoint = transformToWorld(adjustedPoint, optRT.rotation, optRT.translation);
-                }
-                const cameraPoint = invTransform(adjustedPoint, cam.rotation, cam.translation);
-                if (cameraPoint.z > 0) {
-                    const uv = pointToUV(cameraPoint, cam.intrinsics);
-                    if (uv.u > 0 && uv.u < 1980 && uv.v > 0 && uv.v < 943) {
-                        const pointCam = {
-                            x: (uv.u - cam.intrinsics[0][2]) / cam.intrinsics[0][0] * dist_from_cam,
-                            y: (uv.v - cam.intrinsics[1][2]) / cam.intrinsics[1][1] * dist_from_cam,
-                            z: dist_from_cam
-                        };
-                        let worldBack = transformToWorld(pointCam, cam.rotation, cam.translation);
-                        if (optimizedRT && document.getElementById('applyOptimizedRT').checked) {
-                            const optRT = optimizedRT['steps'][currentRTStep][sensor];
-                            worldBack = transformToWorld(worldBack, optRT.rotation, optRT.translation);
-                        }
-                        positions.push(worldBack.x, worldBack.y, worldBack.z);
-                        // Convert radar color to normalized RGB
-                        const colorHex = radarColors[sensor] || 0xff0000;
-                        const r = ((colorHex >> 16) & 0xff) / 255;
-                        const g = ((colorHex >> 8) & 0xff) / 255;
-                        const b = (colorHex & 0xff) / 255;
-                        colors.push(r, g, b);
-                    }
-                }
-            });
-        });
-    });
-
-    // Create a single Points object for all projected points
-    if (positions.length > 0) {
-        const geometry = new THREE.BufferGeometry();
-        geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-        geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-        const material = new THREE.PointsMaterial({ size: 5, vertexColors: true });
-        const points = new THREE.Points(geometry, material);
-        projectedGroup.add(points);
-    }
-}
-
-// Visualize matched pairs for current frame
-function visualizeMatchedPairsForFrame() {
-    console.log('Visualizing matched pairs for current frame');
-    // Remove previous matched lines
-    if (scene.getObjectByName('MatchedPairsGroup')) {
-        scene.remove(scene.getObjectByName('MatchedPairsGroup'));
-    }
-    const group = new THREE.Group();
-    group.name = 'MatchedPairsGroup';
-    if (!currentFrameData) return;
-    const key = `${currentFrameData.seq_id}_${currentFrameData.frame_id}`;
-    const pairs = matchedPairsByFrame[key] || [];
-    console.log(`Visualizing matched pairs for frame ${currentFrameData.frame_id} in sequence ${currentFrameData.seq_id}`);
-
-    console.log('matchedPairs:', matchedPairs);
-    console.log("matchedPairsByFrame data:", matchedPairsByFrame);
-
-    console.log("Matched pairs for frame:", pairs);
-    pairs.forEach(pair => {
-        const radar1 = pair.radar1;
-        const radar2 = pair.radar2;
-        const idx1 = pair.line1Index;
-        const idx2 = pair.line2Index;
-        // Get line objects from currentRadarData
-        if (currentRadarData[radar1] && currentRadarData[radar1].lines[idx1]) {
-            const line = currentRadarData[radar1].lines[idx1];
-            let extendedLineP1 = {
-                x: line.lineP1.x + (line.lineP1.x - line.lineP0.x) * 100,
-                y: line.lineP1.y + (line.lineP1.y - line.lineP0.y) * 100,
-                z: line.lineP1.z + (line.lineP1.z - line.lineP0.z) * 100
-            };
-            let extendedLineP0 = {
-                x: line.lineP0.x + (line.lineP0.x - line.lineP1.x) * 100,
-                y: line.lineP0.y + (line.lineP0.y - line.lineP1.y) * 100,
-                z: line.lineP0.z + (line.lineP0.z - line.lineP1.z) * 100
-            };
-            if (getCurrentCoordSystem() === 'world' && currentFrameData[radar1]) {
-                const sensorInfo = currentFrameData[radar1];
-                if (optimizedRT && document.getElementById('applyOptimizedRT').checked) {
-                    const optRT = optimizedRT['steps'][currentRTStep][radar1];
-                    extendedLineP0 = transformWithOptimizedRT(extendedLineP0, sensorInfo.rotation, sensorInfo.translation, optRT.rotation, optRT.translation);
-                    extendedLineP1 = transformWithOptimizedRT(extendedLineP1, sensorInfo.rotation, sensorInfo.translation, optRT.rotation, optRT.translation);
-                } else {
-                    extendedLineP0 = transformToWorld(extendedLineP0, sensorInfo.rotation, sensorInfo.translation);
-                    extendedLineP1 = transformToWorld(extendedLineP1, sensorInfo.rotation, sensorInfo.translation);
-                }
-            }
-            addLineToGroup(extendedLineP0, extendedLineP1, group, radarColors[radar1] || 0xffffff, 4); // Use radar color
+    // Add event listeners
+    document.getElementById('resetGlobalAnalysisBtn').onclick = function () {
+        globalAnalysisResults = [];
+        updateGlobalAnalysisUI();
+    };
+    document.getElementById('copyGlobalAnalysisCsvBtn').onclick = function () {
+        if (globalAnalysisResults.length === 0) return;
+        const header = [
+            'seq_id', 'frame_id', 'radar1', 'line1Index', 'line1Inliers',
+            'radar2', 'line2Index', 'line2Inliers', 'angle', 'spatialDistance'
+        ];
+        const rows = globalAnalysisResults.map(pair => [
+            pair.seq_id ?? '',
+            pair.frame_id ?? '',
+            pair.radar1,
+            pair.line1Index,
+            pair.line1Inliers,
+            pair.radar2,
+            pair.line2Index,
+            pair.line2Inliers,
+            pair.angle?.toFixed(2),
+            pair.spatialDistance?.toFixed(2)
+        ]);
+        let csv = header.join(',') + '\n' + rows.map(r => r.join(',')).join('\n');
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+            navigator.clipboard.writeText(csv);
+        } else {
+            // fallback
+            const textarea = document.createElement('textarea');
+            textarea.value = csv;
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
         }
-        if (currentRadarData[radar2] && currentRadarData[radar2].lines[idx2]) {
-            const line = currentRadarData[radar2].lines[idx2];
-            let extendedLineP1 = {
-                x: line.lineP1.x + (line.lineP1.x - line.lineP0.x) * 100,
-                y: line.lineP1.y + (line.lineP1.y - line.lineP0.y) * 100,
-                z: line.lineP1.z + (line.lineP1.z - line.lineP0.z) * 100
-            };
-
-            let extendedLineP0 = {
-                x: line.lineP0.x + (line.lineP0.x - line.lineP1.x) * 100,
-                y: line.lineP0.y + (line.lineP0.y - line.lineP1.y) * 100,
-                z: line.lineP0.z + (line.lineP0.z - line.lineP1.z) * 100
-            }
-            if (getCurrentCoordSystem() === 'world' && currentFrameData[radar2]) {
-                const sensorInfo = currentFrameData[radar2];
-                if (optimizedRT && document.getElementById('applyOptimizedRT').checked) {
-                    const optRT = optimizedRT['steps'][currentRTStep][radar2];
-                    extendedLineP0 = transformWithOptimizedRT(extendedLineP0, sensorInfo.rotation, sensorInfo.translation, optRT.rotation, optRT.translation);
-                    extendedLineP1 = transformWithOptimizedRT(extendedLineP1, sensorInfo.rotation, sensorInfo.translation, optRT.rotation, optRT.translation);
-                } else {
-                    extendedLineP0 = transformToWorld(extendedLineP0, sensorInfo.rotation, sensorInfo.translation);
-                    extendedLineP1 = transformToWorld(extendedLineP1, sensorInfo.rotation, sensorInfo.translation);
-                }
-            }
-            addLineToGroup(extendedLineP0, extendedLineP1, group, radarColors[radar2] || 0xffffff, 4); // Use radar color
-        }
-    });
-    scene.add(group);
-    // Project all points onto image planes for current frame
-    projectPointsToImages();
+    };
 }
+// Next Frame button logic
 document.getElementById('nextFrameButton').addEventListener('click', function () {
     if (!sceneData || sceneData.length === 0) return;
     const sequenceSelect = document.getElementById('sequenceSelect');
@@ -287,10 +124,6 @@ const tickLength = 4;
 const tickColor = 0x888888;
 const tickMaterial = new THREE.LineBasicMaterial({ color: tickColor });
 const tickGroup = new THREE.Group();
-
-const projectedGroup = new THREE.Group();
-projectedGroup.name = 'ProjectedPointsGroup';
-scene.add(projectedGroup);
 for (let i = 10; i < axesLength; i += 10) {
     // X axis ticks (red)
     let xTickGeom = new THREE.BufferGeometry().setFromPoints([
@@ -361,8 +194,11 @@ controls.update();
 
 let linesGroup = new THREE.Group();
 let inliersGroup = new THREE.Group();
+let validPairsGroup = new THREE.Group();
 scene.add(linesGroup);
 scene.add(inliersGroup);
+validPairsGroup.name = 'ValidLinePairs';
+scene.add(validPairsGroup);
 
 
 
@@ -372,6 +208,8 @@ let currentFrameData = null; // Store current frame data
 let currentRadarData = {}; // Store raw radar data for coordinate transformations
 let currentValidPairs = []; // Store current valid pairs
 
+// Table for analysis results
+const analysisDiv = document.getElementById('analysis_results');
 
 // Initialize radar groups
 const radarSensors = ['RADAR_LEFT_FRONT', 'RADAR_LEFT_BACK', 'RADAR_RIGHT_FRONT',
@@ -406,9 +244,6 @@ function clearCameraPlanes() {
         scene.remove(plane);
     }
     cameraPlanes = [];
-    //make sure cameraPlanes is empty
-    console.log("Cleared camera planes");
-
 }
 
 function addAllCameraPlanes(frameData, distance = 200) {
@@ -481,6 +316,77 @@ function addCameraImagePlane(cameraInfo, name = "CAMERA", dist_from_cam = 200) {
         scene.add(plane);
     });
 }
+
+// Function to clear valid pairs visualization
+function clearValidPairs() {
+    while (validPairsGroup.children.length) {
+        validPairsGroup.remove(validPairsGroup.children[0]);
+    }
+}
+
+// Function to visualize valid line pairs
+function visualizeValidPairs(validPairs) {
+    clearValidPairs();
+
+
+    if (!document.getElementById('showOnlyValidPairs').checked) {
+        analysisDiv.innerHTML = '<em>Show ONLY Valid Pairs is not enabled.</em>';
+        return;
+    }
+
+    // 3D visualization as before
+    validPairs.forEach((pair, index) => {
+        // Create connection line between centroids
+        const geometry = new THREE.BufferGeometry().setFromPoints([
+            pair.centroid1,
+            pair.centroid2,
+        ]);
+
+        // Use a bright color for connection lines (white/yellow)
+        const material = new THREE.LineBasicMaterial({
+            color: 0xffff00,
+            linewidth: 3,
+            transparent: true,
+            opacity: 0.8
+        });
+
+        const connectionLine = new THREE.Line(geometry, material);
+        validPairsGroup.add(connectionLine);
+
+        // Add small spheres at centroids to highlight them
+        const sphereGeometry = new THREE.SphereGeometry(0.2, 8, 6);
+        const sphereMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+
+        const sphere1 = new THREE.Mesh(sphereGeometry, sphereMaterial);
+        sphere1.position.copy(pair.centroid1);
+        validPairsGroup.add(sphere1);
+
+        const sphere2 = new THREE.Mesh(sphereGeometry, sphereMaterial);
+        sphere2.position.copy(pair.centroid2);
+        validPairsGroup.add(sphere2);
+
+        const sphereMaterial2 = new THREE.MeshBasicMaterial({ color: 0xffaa00 });
+        const sphere3 = new THREE.Mesh(sphereGeometry, sphereMaterial2);
+        sphere3.position.copy(pair.projection1);
+        validPairsGroup.add(sphere3);
+        const sphere4 = new THREE.Mesh(sphereGeometry, sphereMaterial2);
+        sphere4.position.copy(pair.projection2);
+        validPairsGroup.add(sphere4);
+    });
+
+    console.log(`Visualized ${validPairs.length} valid line pairs`);
+}
+// Function to check if a line is part of valid pairs
+function isLineInValidPairs(radar, lineIndex) {
+    if (!document.getElementById('showOnlyValidPairs').checked) {
+        return true; // Show all lines if not filtering
+    }
+
+    return currentValidPairs.some(pair =>
+        (pair.radar1 === radar && pair.line1Index === lineIndex) ||
+        (pair.radar2 === radar && pair.line2Index === lineIndex)
+    );
+}
 // Function to calculate line direction vector
 function getLineDirection(line) {
     const dir = new THREE.Vector3(
@@ -504,6 +410,20 @@ function getAngleBetweenVectors(v1, v2) {
     return (angle * 180) / Math.PI;
 }
 
+// Function to calculate distance from point to line
+function getDistanceFromPointToLineOld(point, lineStart, lineEnd) {
+    const lineVec = new THREE.Vector3().subVectors(lineEnd, lineStart);
+    const pointVec = new THREE.Vector3().subVectors(point, lineStart);
+
+    const lineLengthSq = lineVec.lengthSq();
+    if (lineLengthSq === 0) return point.distanceTo(lineStart);
+
+    const t = Math.max(0, Math.min(1, pointVec.dot(lineVec) / lineLengthSq));
+    const projection = new THREE.Vector3().addVectors(lineStart, lineVec.multiplyScalar(t));
+
+    return [point.distanceTo(projection), projection]; // Return distance and projection point
+}
+
 //funtion to project a point onto a line, the line represented by two points
 function getDistanceFromPointToLine(point, lineStart, lineEnd) {
     const lineVec = new THREE.Vector3().subVectors(lineEnd, lineStart);
@@ -520,6 +440,300 @@ function getDistanceFromPointToLine(point, lineStart, lineEnd) {
     return [point.distanceTo(projection), projection];
 }
 
+// Function to analyze line pairs across different radars
+function analyzeLinePairs() {
+    const angleThreshold = parseFloat(document.getElementById('angleSlider').value);
+    const spatialThreshold = parseFloat(document.getElementById('spatialSlider').value);
+    const inlierThreshold = parseInt(document.getElementById('inlierSlider').value);
+
+    console.log(`\n=== Line Pair Analysis ===`);
+    console.log(`Angle threshold: ${angleThreshold}°`);
+    console.log(`Spatial threshold: ${spatialThreshold}m`);
+    console.log(`Inlier threshold: ${inlierThreshold}`);
+
+    const validLinePairs = [];
+    const radarSensorPairs = [];
+
+    // Generate all radar sensor pairs
+    for (let i = 0; i < radarSensors.length; i++) {
+        for (let j = i + 1; j < radarSensors.length; j++) {
+            radarSensorPairs.push([radarSensors[i], radarSensors[j]]);
+        }
+    }
+
+    let totalPairs = 0;
+    let filteredPairs = 0;
+
+
+    // Analyze each radar pair
+    radarSensorPairs.forEach(([radar1, radar2]) => {
+        if (!currentRadarData[radar1] || !currentRadarData[radar2]) return;
+
+        // Get display data (transformed if needed)
+        let data1 = currentRadarData[radar1];
+        let data2 = currentRadarData[radar2];
+
+        if (getCurrentCoordSystem() === 'world' && currentFrameData) {
+            if (currentFrameData[radar1]) {
+                data1 = transformDataToWorld(currentRadarData[radar1], currentFrameData[radar1], optimizedRT && document.getElementById('applyOptimizedRT').checked ? optimizedRT['steps'][currentRTStep][radar1] : null);
+            }
+            if (currentFrameData[radar2]) {
+                data2 = transformDataToWorld(currentRadarData[radar2], currentFrameData[radar2], optimizedRT && document.getElementById('applyOptimizedRT').checked ? optimizedRT['steps'][currentRTStep][radar2] : null);
+            }
+        }
+
+        // Filter lines by inlier threshold
+        const lines1 = data1.lines.filter(line => line.inliers >= inlierThreshold);
+        const lines2 = data2.lines.filter(line => line.inliers >= inlierThreshold);
+
+        // Compare all line pairs between these radars
+        lines1.forEach((line1, idx1) => {
+            lines2.forEach((line2, idx2) => {
+                totalPairs++;
+
+                // Calculate line directions
+                const dir1 = getLineDirection(line1);
+                const dir2 = getLineDirection(line2);
+
+                // Calculate angle between lines (consider both orientations)
+                const angle1 = getAngleBetweenVectors(dir1, dir2);
+                const angle2 = getAngleBetweenVectors(dir1, dir2.clone().negate());
+                const minAngle = Math.min(angle1, angle2);
+
+                // Calculate centroids
+                const centroid1 = getLineCentroid(line1);
+                const centroid2 = getLineCentroid(line2);
+
+                // Calculate spatial distance (distance from centroid to the other line)
+                const [dist1, projection1] = getDistanceFromPointToLine(
+                    centroid1,
+                    new THREE.Vector3(line2.lineP0.x, line2.lineP0.y, line2.lineP0.z),
+                    new THREE.Vector3(line2.lineP1.x, line2.lineP1.y, line2.lineP1.z)
+                );
+                const [dist2, projection2] = getDistanceFromPointToLine(
+                    centroid2,
+                    new THREE.Vector3(line1.lineP0.x, line1.lineP0.y, line1.lineP0.z),
+                    new THREE.Vector3(line1.lineP1.x, line1.lineP1.y, line1.lineP1.z)
+                );
+                const spatialDistance = Math.min(dist1, dist2); // or use (dist1 + dist2) / 2 for average
+                // Check if pair meets thresholds
+                if (minAngle <= angleThreshold && spatialDistance <= spatialThreshold) {
+                    filteredPairs++;
+
+                    const pairInfo = {
+                        radar1: radar1,
+                        radar2: radar2,
+                        line1Index: idx1,
+                        line2Index: idx2,
+                        angle: minAngle,
+                        spatialDistance: spatialDistance,
+                        projection1: projection1,
+                        projection2: projection2,
+                        line1Inliers: line1.inliers,
+                        line2Inliers: line2.inliers,
+                        centroid1: centroid1,
+                        centroid2: centroid2
+                    };
+
+                    validLinePairs.push(pairInfo);
+                }
+            });
+        });
+    });
+
+    console.log(`\nTotal line pairs examined: ${totalPairs}`);
+    console.log(`Filtered pairs meeting criteria: ${filteredPairs}`);
+    // console.log(`\nValid line pairs:`);
+
+    // validLinePairs.forEach((pair, index) => {
+    //     console.log(`${index + 1}. ${pair.radar1} L${pair.line1Index} ↔ ${pair.radar2} L${pair.line2Index}`);
+    //     console.log(`   Angle: ${pair.angle.toFixed(2)}°, Distance: ${pair.spatialDistance.toFixed(2)}m`);
+    //     console.log(`   Inliers: ${pair.line1Inliers} & ${pair.line2Inliers}`);
+    //     console.log(`   Centroids: (${pair.centroid1.x.toFixed(2)}, ${pair.centroid1.y.toFixed(2)}, ${pair.centroid1.z.toFixed(2)}) ↔ (${pair.centroid2.x.toFixed(2)}, ${pair.centroid2.y.toFixed(2)}, ${pair.centroid2.z.toFixed(2)})`);
+    //     console.log(`   Projections: (${pair.projection1.x.toFixed(2)}, ${pair.projection1.y.toFixed(2)}, ${pair.projection1.z.toFixed(2)}) ↔ (${pair.projection2.x.toFixed(2)}, ${pair.projection2.y.toFixed(2)}, ${pair.projection2.z.toFixed(2)})`);
+    // });
+
+    currentValidPairs = validLinePairs;
+    visualizeValidPairs(validLinePairs);
+    refreshRadarDisplay();
+    updateAnalysisResultsTable(validLinePairs);
+
+    // Add to global list (with seq_id, frame_id)
+    if (currentFrameData && validLinePairs.length > 0) {
+        // Only add new unique matches for this frame (avoid duplicates if re-analyzing same frame)
+        const frameKey = `${currentFrameData.seq_id}_${currentFrameData.frame_id}`;
+        // Remove any previous entries for this frame
+        globalAnalysisResults = globalAnalysisResults.filter(pair => `${pair.seq_id}_${pair.frame_id}` !== frameKey);
+        // Add new
+        validLinePairs.forEach(pair => {
+            globalAnalysisResults.push({
+                seq_id: currentFrameData.seq_id,
+                frame_id: currentFrameData.frame_id,
+                radar1: pair.radar1,
+                radar2: pair.radar2,
+                line1Index: pair.line1Index,
+                line2Index: pair.line2Index,
+                angle: pair.angle,
+                spatialDistance: pair.spatialDistance,
+                line1Inliers: pair.line1Inliers,
+                line2Inliers: pair.line2Inliers
+            });
+        });
+        updateGlobalAnalysisUI();
+    }
+
+    return validLinePairs;
+    // Fill the analysis_results div with a table of valid line pairs
+    function updateAnalysisResultsTable(validPairs) {
+
+        if (!analysisDiv) return;
+        if (!validPairs || validPairs.length === 0) {
+            analysisDiv.innerHTML = `<b>Analysis Results:</b> <span style="color:#888">No valid pairs found.</span>`;
+            return;
+        }
+
+
+
+        // Build HTML table with seq_id and frame_id in every row, and add CSV copy button
+        let html = `<div style="margin-bottom:4px;font-size:14px;">
+        <b>Sequence:</b> <span style="color:#005">${currentFrameData && currentFrameData.seq_id !== undefined ? currentFrameData.seq_id : '-'}</span>
+        &nbsp; <b>Frame:</b> <span style="color:#005">${currentFrameData && currentFrameData.frame_id !== undefined ? currentFrameData.frame_id : '-'}</span>
+    </div>`;
+        html += `<button id="copyPairsCsvBtn" style="font-size:12px;padding:2px 8px;margin-bottom:4px;">Copy as CSV</button>&nbsp;`;
+        html += `<button id="copyPairsJsonBtn" style="font-size:12px;padding:2px 8px;margin-bottom:4px;">Copy as JSON</button>&nbsp;`;
+        html += `<table style="border-collapse:collapse;font-size:13px;">
+        <thead><tr style="background:#eee;">
+            <th style="border:1px solid #ccc;padding:2px 6px;">#</th>
+            <th style="border:1px solid #ccc;padding:2px 6px;">Seq</th>
+            <th style="border:1px solid #ccc;padding:2px 6px;">Frm</th>
+            <th style="border:1px solid #ccc;padding:2px 6px;">R1</th>
+            <th style="border:1px solid #ccc;padding:2px 6px;">Id1</th>
+            <th style="border:1px solid #ccc;padding:2px 6px;">Count1</th>
+            <th style="border:1px solid #ccc;padding:2px 6px;">R2</th>
+            <th style="border:1px solid #ccc;padding:2px 6px;">Id2</th>
+            <th style="border:1px solid #ccc;padding:2px 6px;">Count2</th>
+            <th style="border:1px solid #ccc;padding:2px 6px;">Δ°</th>
+            <th style="border:1px solid #ccc;padding:2px 6px;">Δm</th>
+        </tr></thead><tbody>`;
+        validPairs.forEach((pair, idx) => {
+            html += `<tr>
+            <td style=\"border:1px solid #ccc;padding:2px 6px;\">${idx + 1}</td>
+            <td style=\"border:1px solid #ccc;padding:2px 6px;\">${currentFrameData && currentFrameData.seq_id !== undefined ? currentFrameData.seq_id : '-'}</td>
+            <td style=\"border:1px solid #ccc;padding:2px 6px;\">${currentFrameData && currentFrameData.frame_id !== undefined ? currentFrameData.frame_id : '-'}</td>
+            <td style=\"border:1px solid #ccc;padding:2px 6px;\">${pair.radar1.replace('RADAR_', '')}</td>
+            <td style=\"border:1px solid #ccc;padding:2px 6px;\">${pair.line1Index}</td>
+            <td style=\"border:1px solid #ccc;padding:2px 6px;\">${pair.line1Inliers}</td>
+            <td style=\"border:1px solid #ccc;padding:2px 6px;\">${pair.radar2.replace('RADAR_', '')}</td>
+            <td style=\"border:1px solid #ccc;padding:2px 6px;\">${pair.line2Index}</td>
+            <td style=\"border:1px solid #ccc;padding:2px 6px;\">${pair.line2Inliers}</td>
+            <td style=\"border:1px solid #ccc;padding:2px 6px;\">${pair.angle.toFixed(2)}</td>
+            <td style=\"border:1px solid #ccc;padding:2px 6px;\">${pair.spatialDistance.toFixed(2)}</td>
+        </tr>`;
+        });
+        html += '</tbody></table>';
+        analysisDiv.innerHTML = html;
+
+        // CSV copy logic
+        const csvBtn = document.getElementById('copyPairsCsvBtn');
+        if (csvBtn) {
+            csvBtn.onclick = function () {
+                const header = [
+                    '#', 'seq_id', 'frame_id', 'radar1', 'line1Index', 'line1Inliers',
+                    'radar2', 'line2Index', 'line2Inliers', 'angle', 'spatialDistance'
+                ];
+                const rows = validPairs.map((pair, idx) => [
+                    idx + 1,
+                    currentFrameData && currentFrameData.seq_id !== undefined ? currentFrameData.seq_id : '',
+                    currentFrameData && currentFrameData.frame_id !== undefined ? currentFrameData.frame_id : '',
+                    pair.radar1,
+                    pair.line1Index,
+                    pair.line1Inliers,
+                    pair.radar2,
+                    pair.line2Index,
+                    pair.line2Inliers,
+                    pair.angle.toFixed(2),
+                    pair.spatialDistance.toFixed(2)
+                ]);
+                let csv = header.join(',') + '\n' + rows.map(r => r.join(',')).join('\n');
+                // Copy to clipboard
+                if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+                    navigator.clipboard.writeText(csv).then(() => {
+                        csvBtn.textContent = 'Copied!';
+                        setTimeout(() => { csvBtn.textContent = 'Copy to clipboard as CSV'; }, 1200);
+                    }, () => {
+                        fallbackCopyTextToClipboard(csv, csvBtn);
+                    });
+                } else {
+                    fallbackCopyTextToClipboard(csv, csvBtn);
+                }
+            };
+        }
+        // Fallback function for copying text
+        function fallbackCopyTextToClipboard(text, btn) {
+            try {
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+                btn.textContent = 'Copied!';
+                setTimeout(() => { btn.textContent = 'Copy to clipboard as CSV'; }, 1200);
+            } catch (e) {
+                btn.textContent = 'Copy failed';
+                setTimeout(() => { btn.textContent = 'Copy to clipboard as CSV'; }, 1200);
+            }
+        }
+        // Add event listener for copy button
+        const btn = document.getElementById('copyPairsJsonBtn');
+        if (btn) {
+            btn.onclick = function () {
+                // Only copy the main fields, not the THREE.Vector3 objects
+                const jsonPairs = validPairs.map(pair => ({
+                    seq_id: currentFrameData && currentFrameData.seq_id !== undefined ? currentFrameData.seq_id : null,
+                    frame_id: currentFrameData && currentFrameData.frame_id !== undefined ? currentFrameData.frame_id : null,
+                    radar1: pair.radar1,
+                    radar2: pair.radar2,
+                    line1Index: pair.line1Index,
+                    line2Index: pair.line2Index,
+                    angle: pair.angle,
+                    spatialDistance: pair.spatialDistance,
+                    line1Inliers: pair.line1Inliers,
+                    line2Inliers: pair.line2Inliers
+                }));
+                const jsonStr = JSON.stringify(jsonPairs, null, 2);
+                // Fallback for browsers/environments where navigator.clipboard may be undefined
+                if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+                    navigator.clipboard.writeText(jsonStr).then(() => {
+                        btn.textContent = 'Copied!';
+                        setTimeout(() => { btn.textContent = 'Copy as JSON'; }, 1200);
+                    }, () => {
+                        fallbackCopyTextToClipboard(jsonStr, btn);
+                    });
+                } else {
+                    fallbackCopyTextToClipboard(jsonStr, btn);
+                }
+            };
+        }
+        // Fallback function for copying text
+        function fallbackCopyTextToClipboard(text, btn) {
+            try {
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+                btn.textContent = 'Copied!';
+                setTimeout(() => { btn.textContent = 'Copy as JSON'; }, 1200);
+            } catch (e) {
+                btn.textContent = 'Copy failed';
+                setTimeout(() => { btn.textContent = 'Copy as JSON'; }, 1200);
+            }
+        }
+    }
+}
+
 // Function to clear all radar data
 function clearAllRadarData() {
     radarSensors.forEach(sensor => {
@@ -527,32 +741,6 @@ function clearAllRadarData() {
             radarGroups[sensor].remove(radarGroups[sensor].children[0]);
         }
     });
-}
-function pointToUV(point, k) {
-    // Convert point to UV coordinates based on intrinsic matrix k
-    // k[0][1] = 0
-    // k[1][0] = 0
-    const u = (k[0][0] * point.x) / point.z + k[0][2];
-    const v = (k[1][1] * point.y) / point.z + k[1][2];
-    return { u, v };
-}
-function invTransform(point, rotation, translation) {
-    // Create rotation matrix from 3x3 array
-    const rotMatrix = new THREE.Matrix3();
-    rotMatrix.set(
-        rotation[0][0], rotation[0][1], rotation[0][2],
-        rotation[1][0], rotation[1][1], rotation[1][2],
-        rotation[2][0], rotation[2][1], rotation[2][2]
-    );
-    const txPoint = new THREE.Vector3(point.x, point.y, point.z);
-    // Apply inv translation
-    txPoint.sub(new THREE.Vector3(translation[0], translation[1], translation[2]));
-
-    // Apply inv rotation
-    txPoint.applyMatrix3(rotMatrix.transpose()); // Use transpose for inverse rotation
-
-
-    return { x: txPoint.x, y: txPoint.y, z: txPoint.z };
 }
 // Function to transform point from sensor to world coordinates
 function transformToWorld(point, rotation, translation) {
@@ -634,34 +822,41 @@ function getCurrentCoordSystem() {
     return document.querySelector('input[name="coordSystem"]:checked').value;
 }
 
-// Function to load and display radar data, with callback when all loaded
-function loadRadarData(sensor, filename, onAllLoaded) {
+// Function to load and display radar data
+function loadRadarData(sensor, filename) {
     fetch(`/json/${filename}`)
         .then(r => r.json())
         .then(data => {
+            // Store raw data for coordinate transformations
             currentRadarData[sensor] = data;
+
+            // Clear existing data for this sensor
             while (radarGroups[sensor].children.length) {
                 radarGroups[sensor].remove(radarGroups[sensor].children[0]);
             }
+
+            // Transform data based on coordinate system selection
             let displayData = data;
             if (getCurrentCoordSystem() === 'world' && currentFrameData && currentFrameData[sensor]) {
                 displayData = transformDataToWorld(data, currentFrameData[sensor], optimizedRT && document.getElementById('applyOptimizedRT').checked ? optimizedRT['steps'][currentRTStep][sensor] : null);
             }
+
+            // Add points with sensor-specific color
             const color = radarColors[sensor];
             addPointsToGroup(displayData.points, radarGroups[sensor], color, 0.15);
+
+            // Add lines with sensor-specific color
+            const threshold = parseInt(document.getElementById('inlierSlider').value);
+            addLinesToGroup(displayData, radarGroups[sensor], color, threshold);
+
+            // Update status
             document.getElementById(`status_${sensor}`).textContent = `✓ ${data.points.length}pts`;
             document.getElementById(`status_${sensor}`).style.color = '#4a9';
-            if (typeof onAllLoaded === 'function') {
-                onAllLoaded();
-            }
         })
         .catch(err => {
             console.error(`Failed to load ${sensor}:`, filename, err);
             document.getElementById(`status_${sensor}`).textContent = '✗ Error';
             document.getElementById(`status_${sensor}`).style.color = '#e44';
-            if (typeof onAllLoaded === 'function') {
-                onAllLoaded();
-            }
         });
 }
 
@@ -670,6 +865,7 @@ function refreshRadarDisplay() {
     radarSensors.forEach(sensor => {
         if (currentRadarData[sensor]) {
             // Clear existing data for this sensor
+            console.log("optimizedRT", optimizedRT);
             while (radarGroups[sensor].children.length) {
                 radarGroups[sensor].remove(radarGroups[sensor].children[0]);
             }
@@ -684,6 +880,9 @@ function refreshRadarDisplay() {
             const color = radarColors[sensor];
             addPointsToGroup(displayData.points, radarGroups[sensor], color, 0.15);
 
+            // Add lines with sensor-specific color
+            const threshold = parseInt(document.getElementById('inlierSlider').value);
+            addLinesToGroup(displayData, radarGroups[sensor], color, threshold);
         }
     });
 }
@@ -693,17 +892,14 @@ document.querySelectorAll('input[name="coordSystem"]').forEach(radio => {
     radio.addEventListener('change', function () {
         console.log(`Switched to ${this.value} coordinates`);
         refreshRadarDisplay();
-
-        visualizeMatchedPairsForFrame();
+        setTimeout(() => analyzeLinePairs(), 100); // Small delay to ensure display is updated
     });
 });
 
 // Add event listener for optimized r/t checkbox
 document.getElementById('applyOptimizedRT')?.addEventListener('change', () => {
-    console.log(`Apply optimized r/t: ${document.getElementById('applyOptimizedRT').checked}`);
     refreshRadarDisplay();
-
-    visualizeMatchedPairsForFrame();
+    setTimeout(() => analyzeLinePairs(), 100);
 });
 
 
@@ -721,8 +917,8 @@ function updateRTTimeStepUI() {
     slider.max = optimizedRT.steps.length - 1;
     slider.value = currentRTStep;
     valueSpan.textContent = optimizedRT.steps[currentRTStep].step;
-    mainLossDiv.textContent = optimizedRT.steps[currentRTStep].main_loss.toFixed(2);
-    regLossDiv.textContent = optimizedRT.steps[currentRTStep].reg_loss.toFixed(2);
+    mainLossDiv.textContent = optimizedRT.steps[currentRTStep].main_loss;
+    regLossDiv.textContent = optimizedRT.steps[currentRTStep].reg_loss;
 }
 
 function getOptimizedRTForStep(stepIdx) {
@@ -745,9 +941,10 @@ function applyOptimizedRTStep(stepIdx) {
     if (!rt) return;
     optimizedRT.current = rt;
     refreshRadarDisplay();
+    setTimeout(() => analyzeLinePairs(), 100);
 }
 
-fetch('/r_t_optimized_lr0.001_rreg0_treg0_30_zero_init.json').then(r => r.json()).then(json => {
+fetch('/r_t_optimized.json').then(r => r.json()).then(json => {
     optimizedRT = json;
     console.log('Loaded optimized r/t:', optimizedRT);
     rtStepsCount = optimizedRT.steps.length;
@@ -762,15 +959,12 @@ document.getElementById('rtTimeStepSlider').addEventListener('input', function (
     updateRTTimeStepUI();
     if (document.getElementById('applyOptimizedRT')?.checked) {
         applyOptimizedRTStep(currentRTStep);
-
-        visualizeMatchedPairsForFrame();
     }
 });
 
 document.getElementById('applyOptimizedRT')?.addEventListener('change', () => {
     if (document.getElementById('applyOptimizedRT').checked) {
         applyOptimizedRTStep(currentRTStep);
-        visualizeMatchedPairsForFrame();
     }
 });
 
@@ -780,6 +974,34 @@ radarSensors.forEach(sensor => {
     checkbox.addEventListener('change', function () {
         radarGroups[sensor].visible = this.checked;
     });
+});
+
+// Add event listener for the show only valid pairs checkbox
+document.getElementById('showOnlyValidPairs').addEventListener('change', function () {
+    console.log(`Show ONLY valid pairs: ${this.checked}`);
+    refreshRadarDisplay(); // Refresh display to apply filtering
+    visualizeValidPairs(currentValidPairs); // Update visualization
+});
+// Update slider to affect all radar sensors
+document.getElementById('inlierSlider').addEventListener('input', function () {
+    document.getElementById('inlierValue').textContent = this.value;
+    const threshold = parseInt(this.value);
+
+    // Refresh display with new threshold
+    analyzeLinePairs(); // Analyze pairs when threshold changes
+    refreshRadarDisplay();
+});
+
+document.getElementById('angleSlider').addEventListener('input', function () {
+    document.getElementById('angleValue').textContent = this.value;
+    analyzeLinePairs(); // Analyze pairs when threshold changes
+    refreshRadarDisplay();
+});
+
+document.getElementById('spatialSlider').addEventListener('input', function () {
+    document.getElementById('spatialValue').textContent = this.value;
+    analyzeLinePairs(); // Analyze pairs when threshold changes
+    refreshRadarDisplay();
 });
 
 
@@ -794,6 +1016,43 @@ function addPointsToGroup(points, group, color, size = 0.15) {
     group.add(pts);
 }
 
+// Function to add lines to a specific group
+function addLinesToGroup(data, group, color, threshold) {
+    const linesGroup = new THREE.Group();
+    const inliersGroup = new THREE.Group();
+    group.add(linesGroup);
+    group.add(inliersGroup);
+    const sensorName = group.name; // Get sensor name from group
+
+    for (let [lineIndex, line] of data.lines.entries()) {
+        if (line.inliers >= threshold) {
+            // Check if we should show this line based on valid pairs filter
+            if (isLineInValidPairs(sensorName, lineIndex)) {
+                let factor = 30;
+                let lineLength = new THREE.Vector3(
+                    line.lineP1.x - line.lineP0.x,
+                    line.lineP1.y - line.lineP0.y,
+                    line.lineP1.z - line.lineP0.z
+                ).length();
+                let direction = new THREE.Vector3(
+                    line.lineP1.x - line.lineP0.x,
+                    line.lineP1.y - line.lineP0.y,
+                    line.lineP1.z - line.lineP0.z
+                ).normalize();
+                let extendedP1 = new THREE.Vector3(
+                    line.lineP1.x + direction.x * factor * lineLength,
+                    line.lineP1.y + direction.y * factor * lineLength,
+                    line.lineP1.z + direction.z * factor * lineLength
+                );
+
+                // Add extended line (red tint of sensor color)
+                addLineToGroup(line.lineP0, extendedP1, linesGroup, lightenColor(color, 0.5), 2);
+                // Add inliers (sensor color)
+                addPointsToGroup(line.inlierCloud, inliersGroup, color, 0.3);
+            }
+        }
+    }
+}
 
 // Function to add a single line to a group
 function addLineToGroup(p0, p1, group, color, width = 2) {
@@ -806,15 +1065,28 @@ function addLineToGroup(p0, p1, group, color, width = 2) {
     group.add(line);
 }
 
+// Function to lighten a color
+function lightenColor(color, factor) {
+    const r = ((color >> 16) & 0xff) * factor;
+    const g = ((color >> 8) & 0xff) * factor;
+    const b = (color & 0xff) * factor;
+    return (Math.min(255, r) << 16) | (Math.min(255, g) << 8) | Math.min(255, b);
+}
+
 // Function to load a specific scene frame
 function loadSceneFrame(frameData) {
     currentFrameData = frameData;
     console.log(`Loading Sequence ${frameData.seq_id}, Frame ${frameData.frame_id}`);
+
+    // Clear all existing radar data
     clearAllRadarData();
+
+    // Extract radar file names and load data
     const radarFiles = {};
     radarSensors.forEach(sensor => {
         if (frameData[sensor] && frameData[sensor].image_file) {
             radarFiles[sensor] = frameData[sensor].image_file;
+            // Reset status
             document.getElementById(`status_${sensor}`).textContent = 'Loading...';
             document.getElementById(`status_${sensor}`).style.color = '#666';
         } else {
@@ -822,19 +1094,25 @@ function loadSceneFrame(frameData) {
             document.getElementById(`status_${sensor}`).style.color = '#999';
         }
     });
+
+    // Show cameras if enabled
     if (document.getElementById('showCameras').checked) {
         addAllCameraPlanes(frameData, 300);
     } else {
         clearCameraPlanes();
     }
+
     console.log('Radar files for this frame:');
     Object.entries(radarFiles).forEach(([sensor, filename]) => {
         console.log(`  ${sensor}: ${filename}`);
+        // Load JSON file for this sensor
         const jsonFilename = filename.split('/').pop().replace('.pcd', '.json');
-        loadRadarData(sensor, jsonFilename, () => {
-            visualizeMatchedPairsForFrame();
-        });
+        loadRadarData(sensor, jsonFilename);
     });
+
+    setTimeout(() => analyzeLinePairs(), 500);
+
+
     // Listen for camera checkbox changes
     const camCheckbox = document.getElementById('showCameras');
     if (camCheckbox && !camCheckbox._listenerAdded) {
@@ -863,11 +1141,6 @@ async function loadSceneData() {
         const response = await fetch('/man_scene_data.json');
         sceneData = await response.json();
         console.log('Loaded scene data:', sceneData.length, 'frames');
-        // console.log("samepl sceneData:", sceneData[0]);
-
-        // main.js: 758 Loaded scene data: 400 frames
-        // main.js: 759 samepl sceneData: { seq_id: 0, frame_id: 0, RADAR_LEFT_FRONT: {… }, RADAR_LEFT_BACK: {… }, RADAR_RIGHT_FRONT: {… }, … } CAMERA_LEFT_BACK: { rotation: Array(3), translation: Array(3), intrinsics: Array(3), image_file: 'samples/CAMERA_LEFT_BACK/CAMERA_LEFT_BACK_1695473372666841.jpg', rotation_ego: Array(3), … } CAMERA_LEFT_FRONT: { rotation: Array(3), translation: Array(3), intrinsics: Array(3), image_file: 'samples/CAMERA_LEFT_FRONT/CAMERA_LEFT_FRONT_1695473372700234.jpg', rotation_ego: Array(3), … } CAMERA_RIGHT_BACK: { rotation: Array(3), translation: Array(3), intrinsics: Array(3), image_file: 'samples/CAMERA_RIGHT_BACK/CAMERA_RIGHT_BACK_1695473372733489.jpg', rotation_ego: Array(3), … } CAMERA_RIGHT_FRONT: image_file: "samples/CAMERA_RIGHT_FRONT/CAMERA_RIGHT_FRONT_1695473372700156.jpg"intrinsics: Array(3)0: (3)[640, 0, 960]1: (3)[0, 640, 520]2: (3)[0, 0, 1]length: 3[[Prototype]]: Array(0)rotation: Array(3)0: (3)[-0.13435425701959738, 0.001549015249188379, 0.9909321541722568]1: (3)[-0.9908970101002001, -0.008775834024833395, -0.13433577375982875]2: (3)[0.008488167952820702, -0.9999602918560946, 0.0027139852391541985]length: 3[[Prototype]]: Array(0)rotation_ego: Array(3)0: (3)[0.00024763393795473876, -0.9999998320507152, -0.0005239999760203633]1: (3)[0.9999188055519216, 0.00024093776977002213, 0.012740653539361373]2: (3)[-0.012740525148192135, -0.0005271124483395865, 0.9999186972806418]length: 3[[Prototype]]: Array(0)translation: (3)[5.226811, -1.310934, 2.092867]0: 5.2268111: -1.3109342: 2.092867length: 3[[Prototype]]: Array(0)translation_ego: (3)[571694.3133318295, 5367847.56365089, 593.99]0: 571694.31333182951: 5367847.563650892: 593.99length: 3[[Prototype]]: Array(0)[[Prototype]]: ObjectRADAR_LEFT_BACK: { rotation: Array(3), translation: Array(3), intrinsics: Array(0), image_file: 'samples/RADAR_LEFT_BACK/RADAR_LEFT_BACK_1695473372704612.pcd', rotation_ego: Array(3), … } RADAR_LEFT_FRONT: { rotation: Array(3), translation: Array(3), intrinsics: Array(0), image_file: 'samples/RADAR_LEFT_FRONT/RADAR_LEFT_FRONT_1695473372704727.pcd', rotation_ego: Array(3), … } RADAR_LEFT_SIDE: { rotation: Array(3), translation: Array(3), intrinsics: Array(0), image_file: 'samples/RADAR_LEFT_SIDE/RADAR_LEFT_SIDE_1695473372702056.pcd', rotation_ego: Array(3), … } RADAR_RIGHT_BACK: { rotation: Array(3), translation: Array(3), intrinsics: Array(0), image_file: 'samples/RADAR_RIGHT_BACK/RADAR_RIGHT_BACK_1695473372704382.pcd', rotation_ego: Array(3), … } RADAR_RIGHT_FRONT: { rotation: Array(3), translation: Array(3), intrinsics: Array(0), image_file: 'samples/RADAR_RIGHT_FRONT/RADAR_RIGHT_FRONT_1695473372701856.pcd', rotation_ego: Array(3), … } RADAR_RIGHT_SIDE: image_file: "samples/RADAR_RIGHT_SIDE/RADAR_RIGHT_SIDE_1695473372653227.pcd"intrinsics: []rotation: Array(3)0: (3)[0.49826000967578826, -0.8669794043049802, -0.00914741869956488]1: (3)[-0.8668459095560831, -0.49834384922940717, 0.015217654914766288]2: (3)[-0.01775195323817705, 0.0003470535976403842, -0.9998423614300556]length: 3[[Prototype]]: Array(0)rotation_ego: Array(3)0: (3)[-0.0004513660101909678, -0.9999998981343572, 0]1: (3)[0.9999187327001204, -0.00045132937486908054, 0.012740655288500415]2: (3)[-0.012740653990665374, 0.000005750698744789139, 0.9999188345574952]length: 3[[Prototype]]: Array(0)translation: (3)[5.1879724, -1.42874, 2.0012435]translation_ego: (3)[571694.3150217665, 5367847.430267435, 594][[Prototype]]: Objectframe_id: 0seq_id: 0[[Prototype]]: Object
-
         populateSequenceDropdown();
     } catch (error) {
         console.error('Failed to load scene data:', error);
@@ -963,7 +1236,12 @@ function handleFrameChange() {
 
 
 
-loadMatchedPairsCSV().then(loadSceneData);
+
+// Add global analysis UI on page load
+window.addEventListener('DOMContentLoaded', updateGlobalAnalysisUI);
+// Initialize file list on page load
+// loadFileList();
+loadSceneData();
 
 
 

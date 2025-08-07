@@ -84,28 +84,45 @@
         <select id="frameSelect">
             <option value="">Select sequence first</option>
         </select>
+        <button id="nextFrameButton">Next Frame</button>
         <div class="slider-group">
-            <button id="nextFrameButton">Next Frame</button>
-            <button id="nextFrameMPButton">Next in matched pairs</button>
+            <label for="inlierSlider">Inlier threshold: </label>
+            <input type="range" id="inlierSlider" min="0" max="100" value="10" step="1">
+            <span id="inlierValue">10</span>
         </div>
+
+        <div class="slider-group">
+            <label for="angleSlider">Angle threshold: </label>
+            <input type="range" id="angleSlider" min="0" max="10" value="2" step=".1">
+            <span id="angleValue">2</span>°
+        </div>
+
+        <div class="slider-group">
+            <label for="spatialSlider">Spatial threshold: </label>
+            <input type="range" id="spatialSlider" min="0" max="2" value="1.0" step="0.01"><span
+                id="spatialValue">1.0</span>m
+        </div>
+
         <div class="slider-group">
             <label for="rtTimeStepSlider">r/t Time Step:</label>
             <input type="range" id="rtTimeStepSlider" min="0" max="0" value="0" step="1">
             <span id="rtTimeStepValue">0</span>
-        </div>
-        <div class="slider-group">
-            <label>Losses</label>
             <label for="rtMainLoss">main:</label>
             <span id="rtMainLoss">0</span>
             <label for="rtRegLoss">reg:</label>
             <span id="rtRegLoss">0</span>
+            <label>losses</label>
         </div>
 
         <!-- Display Options -->
         <div class="checkbox-group">
             <div class="feature-label">Display Options:</div>
             <div class="checkbox-option">
-                <input type="checkbox" id="applyOptimizedRT" value="applyOptimizedRT" checked>
+                <input type="checkbox" id="showOnlyValidPairs" value="validPairs" checked>
+                <label for="showOnlyValidPairs">Show ONLY Valid Pairs</label>
+            </div>
+            <div class="checkbox-option">
+                <input type="checkbox" id="applyOptimizedRT" value="applyOptimizedRT">
                 <label for="applyOptimizedRT">Apply Optimized r/t</label>
             </div>
         </div>
@@ -157,7 +174,10 @@
             <label for="RADAR_RIGHT_SIDE" class="radar-right-side">Right Side</label>
             <span class="radar-status" id="status_RADAR_RIGHT_SIDE">-</span>
         </div>
-        <!-- No analysis results UI -->
+        <div class="radar-checkbox">
+            <div id="global_analysis_results">Global Analysis Results:</div>
+            <div id="analysis_results">Analysis Results:</div>
+        </div>
     </div>
 
 
@@ -170,7 +190,7 @@
         }
     }
     </script>
-    <script type="module" src="main.js"></script>
+    <script type="module" src="main_optimize.js"></script>
 </body>
 
 </html>
